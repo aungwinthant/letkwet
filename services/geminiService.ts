@@ -81,6 +81,19 @@ const normalizeInputKey = (input: string): string => {
   return match && match[1] ? `yt:${match[1]}` : `query:${trimmedInput.toLowerCase()}`;
 };
 
+// Validate if input is a valid YouTube URL
+export const isValidYoutubeUrl = (input: string): boolean => {
+  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+  return ytRegex.test(input.trim());
+};
+
+// Extract YouTube video ID from URL
+const getYoutubeVideoId = (input: string): string | null => {
+  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+  const match = input.trim().match(ytRegex);
+  return match && match[1] ? match[1] : null;
+};
+
 export const logSearch = async (query: string, isCached: boolean = false) => {
   if (!supabase) return;
   try {
@@ -97,7 +110,21 @@ export const logSearch = async (query: string, isCached: boolean = false) => {
 };
 
 export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boolean = true): Promise<SongData> => {
-  const inputKey = normalizeInputKey(input);
+  const trimmedInput = input.trim();
+  
+  // Validate input
+  if (!trimmedInput) {
+    throw new Error("Please enter a YouTube URL or song name.");
+  }
+
+  // If it looks like a YouTube URL, validate it
+  if (trimmedInput.includes('youtube') || trimmedInput.includes('youtu.be')) {
+    if (!isValidYoutubeUrl(trimmedInput)) {
+      throw new Error("Invalid YouTube URL. Please provide a valid YouTube link (youtube.com or youtu.be).");
+    }
+  }
+
+  const inputKey = normalizeInputKey(trimmedInput);
 
   // 1. Cache Check
   if (supabase) {
@@ -131,24 +158,55 @@ export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boo
   const ai = getAI();
   
   const systemInstruction = useDeepSearch 
-    ? `You are a professional music transcriber. 
-       IDENTITY RULE: If a YouTube URL is provided, your priority is to identify that EXACT video. 
-       Search for the video title and artist from the provided URL metadata using Google Search grounding. 
-       Do NOT provide a popular version of the song if it differs from the provided video. 
-       If the URL is a live version, acoustic version, or a specific cover, you MUST provide the chords for THAT specific performance.
-       Output format: Valid ChordPro JSON.`
-    : `Fast Mode: Extract chords from your internal knowledge. If a link is provided, infer the song title from the link text.`;
+    ? `You are an expert professional music transcriber with 20+ years of experience in chord transcription.
+       
+       CRITICAL RULES:
+       1. ACCURACY FIRST: Ensure 90%+ accuracy in chord placement and lyrics
+       2. IDENTITY RULE: If a YouTube URL is provided, identify that EXACT video from metadata using Google Search grounding
+       3. NO SUBSTITUTIONS: Never substitute with a popular version if it differs from the video provided
+       4. SPECIAL VERSIONS: For live versions, acoustic versions, or covers, transcribe THAT specific performance
+       5. CHORD VALIDATION: Double-check all chord positions align with lyrics/vocals
+       6. LYRICS ACCURACY: Ensure lyrics are transcribed correctly with proper capitalization and punctuation
+       7. FORMAT: Use standard ChordPro format with proper [CHORD] notation
+       
+       Output format: Valid ChordPro JSON with high accuracy standards.`
+    : `Fast Mode: Extract chords from your internal knowledge. If a link is provided, infer the song title from the link text. Prioritize speed over exhaustive accuracy.`;
+
+  const prompt = isValidYoutubeUrl(trimmedInput)
+    ? `YOUTUBE VIDEO TRANSCRIPTION TASK:
+       URL: ${trimmedInput}
+       
+       STEP 1: Search for this exact YouTube video using Google Search to get:
+       - Exact video title
+       - Artist name
+       - Video duration
+       - Whether it's original, live, acoustic, or cover version
+       
+       STEP 2: Transcribe the chords and lyrics for THIS SPECIFIC VIDEO with 90%+ accuracy:
+       - Extract each chord [C], [G], [Am], etc. in the correct position above the lyrics
+       - Include all verses, choruses, and sections
+       - Maintain the structure: Title, Artist, Key, ChordPro format
+       
+       STEP 3: Return properly formatted ChordPro:
+       {title: "Exact Video Title", artist: "Artist Name", key: "Key (if known)", releaseDate: "Year if available", chordProContent: "full ChordPro content"}
+       
+       CRITICAL: Match THIS video exactly, not a similar song by the same artist.`
+    : `SONG NAME TRANSCRIPTION TASK:
+       Song Query: "${trimmedInput}"
+       
+       Transcribe the most well-known version of this song with accurate chords and lyrics:
+       - Extract chords in proper [CHORD] notation
+       - Include verses, choruses, and sections
+       - Return ChordPro format with title, artist, key, and content
+       
+       Return JSON: {title, artist, key, releaseDate, chordProContent}`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Identify and transcribe: "${input}". 
-    
-    If this is a YouTube URL, verify the EXACT Video Title and Artist from the grounding metadata first.
-    Return JSON: {title, artist, key, releaseDate, chordProContent}. 
-    For Myanmar songs, use Burmese Unicode.`,
+    contents: prompt,
     config: {
       tools: useDeepSearch ? [{ googleSearch: {} }] : [],
-      thinkingConfig: { thinkingBudget: useDeepSearch ? 15000 : 0 },
+      thinkingConfig: { thinkingBudget: useDeepSearch ? 20000 : 0 },
       systemInstruction: systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
@@ -165,8 +223,18 @@ export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boo
     },
   });
 
-  await logSearch(input, false);
+  await logSearch(trimmedInput, false);
   const parsed = extractJson(response.text || "{}");
+  
+  // Validate music content
+  if (!parsed.chordProContent || parsed.chordProContent.trim() === '') {
+    throw new Error("This doesn't appear to be a music/song. Please provide a valid YouTube video of a song or a song name.");
+  }
+  
+  if (parsed.title === "Unknown Song" && isValidYoutubeUrl(trimmedInput)) {
+    throw new Error("Could not identify the song from the YouTube URL. Please ensure the video is of a song and try again.");
+  }
+  
   const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   const sourceUrls: string[] = groundingChunks
     .map((chunk: any) => chunk.web?.uri)
