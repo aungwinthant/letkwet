@@ -4,23 +4,22 @@ import { SongData, Feedback } from "../types";
 
 const getEnv = (key: string): string => {
   try {
-    // 1. Check import.meta.env (Standard for modern Vite/ESM environments)
-    // @ts-ignore
-    const metaEnv = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env[key] || import.meta.env[`VITE_${key}`]) : null;
-    if (metaEnv) return metaEnv;
-
-    // 2. Check process.env (Node/Vite fallback)
-    if (typeof process !== 'undefined' && process.env && (process.env as any)[key]) {
-      return (process.env as any)[key];
+    // Direct access to import.meta.env (Vite will replace these at build time)
+    if (key === 'API_KEY' || key === 'GEMINI_API_KEY') {
+      // @ts-ignore - Vite will replace this
+      return import.meta.env.GEMINI_API_KEY || '';
     }
-
-    // 3. Check window shim
-    if (typeof window !== 'undefined' && (window as any).process?.env?.[key]) {
-      return (window as any).process.env[key];
+    if (key === 'SUPABASE_URL') {
+      // @ts-ignore - Vite will replace this
+      return import.meta.env.SUPABASE_URL || '';
     }
-    return "";
+    if (key === 'SUPABASE_ANON_KEY') {
+      // @ts-ignore - Vite will replace this
+      return import.meta.env.SUPABASE_ANON_KEY || '';
+    }
+    return '';
   } catch {
-    return "";
+    return '';
   }
 };
 
