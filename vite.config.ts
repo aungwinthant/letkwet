@@ -17,6 +17,11 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
+        // Match what geminiService.ts expects: import.meta.env.*
+        'import.meta.env.GEMINI_API_KEY': JSON.stringify(geminiKey),
+        'import.meta.env.SUPABASE_URL': JSON.stringify(supabaseUrl),
+        'import.meta.env.SUPABASE_ANON_KEY': JSON.stringify(supabaseKey),
+        // Also keep process.env for fallback
         'process.env.API_KEY': JSON.stringify(geminiKey),
         'process.env.GEMINI_API_KEY': JSON.stringify(geminiKey),
         'process.env.SUPABASE_URL': JSON.stringify(supabaseUrl),
