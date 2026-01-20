@@ -3,6 +3,16 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Accept build arguments
+ARG GEMINI_API_KEY
+ARG SUPABASE_URL
+ARG SUPABASE_ANON_KEY
+
+# Set as environment variables for the build
+ENV GEMINI_API_KEY=$GEMINI_API_KEY
+ENV SUPABASE_URL=$SUPABASE_URL
+ENV SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
+
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
