@@ -1,0 +1,5 @@
+{
+  "name": "LETKWET - YouTube-to-ChordPro",
+  "description": "Convert YouTube songs into perfectly formatted ChordPro files using Gemini AI and Google Search grounding.",
+  "requestFramePermissions": []
+}

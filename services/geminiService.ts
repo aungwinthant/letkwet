@@ -1,0 +1,261 @@
+import { GoogleGenAI, Type } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
+import { SongData, Feedback } from "../types";
+
+const getEnv = (key: string): string => {
+  try {
+    // 1. Check import.meta.env (Standard for modern Vite/ESM environments)
+    // @ts-ignore
+    const metaEnv = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env[key] || import.meta.env[`VITE_${key}`]) : null;
+    if (metaEnv) return metaEnv;
+
+    // 2. Check process.env (Node/Vite fallback)
+    if (typeof process !== 'undefined' && process.env && (process.env as any)[key]) {
+      return (process.env as any)[key];
+    }
+
+    // 3. Check window shim
+    if (typeof window !== 'undefined' && (window as any).process?.env?.[key]) {
+      return (window as any).process.env[key];
+    }
+    return "";
+  } catch {
+    return "";
+  }
+};
+
+const supabaseUrl = getEnv("SUPABASE_URL");
+const supabaseAnonKey = getEnv("SUPABASE_ANON_KEY");
+
+// Initialize Supabase only if keys exist
+export const supabase = (supabaseUrl && supabaseAnonKey) 
+  ? createClient(supabaseUrl, supabaseAnonKey) 
+  : null;
+
+if (!supabase) {
+  console.warn("LETKWET: Supabase connection not established. Check SUPABASE_URL and SUPABASE_ANON_KEY.", {
+    url: supabaseUrl ? "✓ configured" : "✗ missing",
+    key: supabaseAnonKey ? "✓ configured" : "✗ missing"
+  });
+} else {
+  console.log("LETKWET: Supabase connected successfully.");
+}
+
+const getAI = () => {
+  const apiKey = getEnv("API_KEY");
+  if (!apiKey) throw new Error("API_KEY is not configured.");
+  return new GoogleGenAI({ apiKey });
+};
+
+const extractJson = (text: string) => {
+  if (!text) throw new Error("Empty AI response.");
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (match && match[1]) {
+      try {
+        return JSON.parse(match[1].trim());
+      } catch (e) {}
+    }
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      try {
+        return JSON.parse(trimmed.substring(start, end + 1));
+      } catch (e) {}
+    }
+    throw new Error("Invalid format returned by AI.");
+  }
+};
+
+const generateMetaKey = (title: string, artist: string, releaseDate?: string): string => {
+  const slugify = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+  return `${slugify(artist)}:${slugify(title)}:${slugify(releaseDate || 'unknown')}`;
+};
+
+const normalizeInputKey = (input: string): string => {
+  const trimmedInput = input.trim();
+  const ytRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+  const match = trimmedInput.match(ytRegex);
+  return match && match[1] ? `yt:${match[1]}` : `query:${trimmedInput.toLowerCase()}`;
+};
+
+export const logSearch = async (query: string, isCached: boolean = false) => {
+  if (!supabase) return;
+  try {
+    await supabase.from('search_logs').insert([{
+      query,
+      ip_address: 'web-client',
+      user_agent: navigator.userAgent,
+      is_cached: isCached
+    }]);
+  } catch (err) {
+    // Non-blocking
+    console.debug("Analytics log failed");
+  }
+};
+
+export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boolean = true): Promise<SongData> => {
+  const inputKey = normalizeInputKey(input);
+
+  // 1. Cache Check
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('song_cache')
+        .select('*')
+        .eq('input_key', inputKey)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (data && !error) {
+        await logSearch(input, true);
+        const d = data as any;
+        return {
+          title: d.title,
+          artist: d.artist,
+          releaseDate: d.release_date,
+          key: d.musical_key,
+          chordProContent: d.chord_pro_content,
+          sourceUrls: d.source_urls || [],
+          isCached: true
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase Lookup Error:", err);
+    }
+  }
+
+  const ai = getAI();
+  
+  const systemInstruction = useDeepSearch 
+    ? `You are a professional music transcriber. 
+       IDENTITY RULE: If a YouTube URL is provided, your priority is to identify that EXACT video. 
+       Search for the video title and artist from the provided URL metadata using Google Search grounding. 
+       Do NOT provide a popular version of the song if it differs from the provided video. 
+       If the URL is a live version, acoustic version, or a specific cover, you MUST provide the chords for THAT specific performance.
+       Output format: Valid ChordPro JSON.`
+    : `Fast Mode: Extract chords from your internal knowledge. If a link is provided, infer the song title from the link text.`;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Identify and transcribe: "${input}". 
+    
+    If this is a YouTube URL, verify the EXACT Video Title and Artist from the grounding metadata first.
+    Return JSON: {title, artist, key, releaseDate, chordProContent}. 
+    For Myanmar songs, use Burmese Unicode.`,
+    config: {
+      tools: useDeepSearch ? [{ googleSearch: {} }] : [],
+      thinkingConfig: { thinkingBudget: useDeepSearch ? 15000 : 0 },
+      systemInstruction: systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          artist: { type: Type.STRING },
+          releaseDate: { type: Type.STRING },
+          key: { type: Type.STRING },
+          chordProContent: { type: Type.STRING },
+        },
+        required: ["title", "artist", "chordProContent"],
+      },
+    },
+  });
+
+  await logSearch(input, false);
+  const parsed = extractJson(response.text || "{}");
+  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const sourceUrls: string[] = groundingChunks
+    .map((chunk: any) => chunk.web?.uri)
+    .filter((uri: string | undefined): uri is string => !!uri);
+
+  const songData: SongData = {
+    title: parsed.title || "Unknown Song",
+    artist: parsed.artist || "Unknown Artist",
+    releaseDate: parsed.releaseDate,
+    key: parsed.key,
+    chordProContent: parsed.chordProContent || "",
+    sourceUrls: Array.from(new Set(sourceUrls)),
+    isCached: false
+  };
+
+  // 3. Save to Cache
+  if (supabase && songData.chordProContent && songData.title !== "Unknown Song") {
+    try {
+      const metaKey = generateMetaKey(songData.title, songData.artist, songData.releaseDate);
+      
+      const { error: upsertError } = await supabase.from('song_cache').upsert({
+        input_key: inputKey,
+        meta_key: metaKey,
+        title: songData.title,
+        artist: songData.artist,
+        release_date: songData.releaseDate,
+        musical_key: songData.key,
+        chord_pro_content: songData.chordProContent,
+        source_urls: songData.sourceUrls,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'meta_key' });
+
+      if (upsertError) {
+        console.error("Supabase Persistence Failed:", upsertError.message, upsertError.details);
+      } else {
+        console.log("LETKWET: Successfully cached generation to Supabase.");
+      }
+    } catch (err) {
+      console.warn("Cache Persistence Exception:", err);
+    }
+  }
+
+  return songData;
+};
+
+export const fetchRecentSongs = async (limit: number = 6): Promise<SongData[]> => {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('song_cache')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return (data || []).map((d: any) => ({
+      title: d.title,
+      artist: d.artist,
+      releaseDate: d.release_date,
+      key: d.musical_key,
+      chordProContent: d.chord_pro_content,
+      sourceUrls: d.source_urls || [],
+      isCached: true
+    }));
+  } catch (err) {
+    console.error("Library Fetch Failed:", err);
+    return [];
+  }
+};
+
+export const submitFeedback = async (feedback: Feedback) => {
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('feedbacks').insert([feedback]);
+    if (error) throw error;
+  } catch (err) {
+    console.error("Feedback Submission Failed:", err);
+  }
+};
+
+export const fetchFeedbacks = async (): Promise<Feedback[]> => {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase.from('feedbacks').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.error("Feedback Fetch Failed:", err);
+    return [];
+  }
+};
