@@ -34,40 +34,6 @@ const ChordProViewer: React.FC<ChordProViewerProps> = ({ data }) => {
     window.open(`https://www.facebook.com/sharer/sharer.php?u=${shareUrl}&quote=${quote}`, 'facebook-share-dialog', 'width=626,height=436');
   };
 
-  const renderChordLine = (line: string) => {
-    if (!line) return <div className="h-4" />;
-    const parts = line.split(/(\[.*?\])/g);
-    const elements: { chord: string; text: string }[] = [];
-    
-    let currentChord = "";
-    
-    parts.forEach(part => {
-      if (part.startsWith('[') && part.endsWith(']')) {
-        currentChord = part.slice(1, -1);
-      } else if (part || currentChord) {
-        elements.push({ chord: currentChord, text: part || " " });
-        currentChord = ""; 
-      }
-    });
-
-    return (
-      <div className="flex flex-wrap mb-4 leading-none">
-        {elements.map((el, i) => (
-          <div key={i} className="flex flex-col min-w-fit">
-            <span className="text-indigo-600 font-bold text-[11px] md:text-[13px] mono h-5 pr-1 select-none">
-              {el.chord}
-            </span>
-            <span className="text-slate-900 whitespace-pre pr-0.5 text-sm md:text-base leading-tight">
-              {el.text}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
-  const chordProLines = (data.chordProContent || '').split('\n');
-
   return (
     <div className="w-full max-w-5xl mx-auto mt-4 md:mt-8 bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-500 font-results">
       {/* Header Info */}
@@ -125,33 +91,11 @@ const ChordProViewer: React.FC<ChordProViewerProps> = ({ data }) => {
         </div>
       </div>
       
-      {/* Viewer Content - Stacks on mobile, Grid on desktop */}
-      <div className="flex flex-col lg:grid lg:grid-cols-5 bg-slate-50">
-        {/* Main Result Sheet - Top on mobile */}
-        <div className="order-1 lg:order-2 lg:col-span-3 p-4 md:p-8 overflow-x-auto min-h-[400px]">
-          <div className="max-w-prose mx-auto min-w-full lg:min-w-[450px]">
-            {chordProLines.length > 0 && chordProLines[0] !== "" ? chordProLines.map((line, idx) => {
-              const trimmed = line.trim();
-              if (trimmed.startsWith('{title') || trimmed.startsWith('{artist') || trimmed.startsWith('{key')) return null;
-              
-              if (trimmed.startsWith('{comment:') || trimmed.startsWith('{c:')) {
-                const comment = trimmed.match(/\{(?:comment|c):\s*(.*)\}/)?.[1];
-                return <div key={idx} className="text-slate-400 font-bold text-[10px] md:text-xs uppercase tracking-widest mb-4 mt-8 border-b border-slate-200 pb-1">{comment}</div>;
-              }
-
-              if (trimmed === '') return <div key={idx} className="h-4 md:h-6" />;
-              
-              return <div key={idx}>{renderChordLine(line)}</div>;
-            }) : (
-              <div className="text-slate-400 italic py-20 text-center">No sheet data found.</div>
-            )}
-          </div>
-        </div>
-
-        {/* ChordPro Source - Bottom on mobile */}
-        <div className="order-2 lg:order-1 lg:col-span-2 p-4 md:p-6 bg-slate-900 border-t lg:border-t-0 lg:border-r border-slate-800 overflow-auto max-h-[300px] lg:max-h-[800px]">
-          <h3 className="text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">ChordPro Source</h3>
-          <pre className="mono text-[11px] md:text-[13px] text-indigo-300/80 leading-relaxed whitespace-pre-wrap">
+      {/* Viewer Content - ChordPro Source Only */}
+      <div className="p-4 md:p-8 bg-slate-50 overflow-x-auto">
+        <h3 className="text-xs md:text-sm font-bold text-slate-700 uppercase tracking-widest mb-4 px-2">ChordPro Format</h3>
+        <div className="bg-slate-900 rounded-lg p-4 md:p-6 overflow-auto max-h-[600px]">
+          <pre className="mono text-[11px] md:text-[13px] text-indigo-300/80 leading-relaxed whitespace-pre-wrap font-mono">
             {data.chordProContent || '# No content available'}
           </pre>
         </div>
