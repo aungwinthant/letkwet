@@ -3,19 +3,22 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci
+# Install yarn
+RUN npm install -g yarn
+
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
 
 COPY . .
-RUN npm run build
+RUN yarn build
 
 # Runtime stage
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Install a simple HTTP server for serving the built app
-RUN npm install -g serve
+# Install yarn and serve
+RUN npm install -g yarn serve
 
 # Copy built app from builder
 COPY --from=builder /app/dist ./dist
