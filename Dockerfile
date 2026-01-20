@@ -8,15 +8,17 @@ ARG GEMINI_API_KEY
 ARG SUPABASE_URL
 ARG SUPABASE_ANON_KEY
 
-# Create .env file for Vite during build
-RUN echo "GEMINI_API_KEY=${GEMINI_API_KEY}" > .env.local && \
-    echo "SUPABASE_URL=${SUPABASE_URL}" >> .env.local && \
-    echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}" >> .env.local
-
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
 COPY . .
+
+# Create .env.local AFTER copying source code but BEFORE build
+RUN echo "GEMINI_API_KEY=${GEMINI_API_KEY}" > .env.local && \
+    echo "SUPABASE_URL=${SUPABASE_URL}" >> .env.local && \
+    echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}" >> .env.local && \
+    cat .env.local
+
 RUN yarn build
 
 # Runtime stage
