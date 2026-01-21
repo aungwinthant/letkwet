@@ -20,6 +20,22 @@ export interface GroundingSource {
   uri: string;
 }
 
+export interface YouTubeSearchResult {
+  id: string;
+  title: string;
+  artist?: string;
+  duration?: string;
+  thumbnail?: string;
+  url: string;
+  isFromCache?: boolean;
+}
+
+export interface SearchResults {
+  cacheResults: SongData[];
+  youtubeResults: YouTubeSearchResult[];
+  query: string;
+}
+
 export interface Feedback {
   id?: string;
   email: string;

@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
-import { SongData, Feedback } from "../types";
+import { SongData, Feedback, YouTubeSearchResult } from "../types";
 
 const getEnv = (key: string): string => {
   try {
@@ -161,43 +161,71 @@ export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boo
     ? `You are an expert professional music transcriber with 20+ years of experience in chord transcription.
        
        CRITICAL RULES:
-       1. ACCURACY FIRST: Ensure 90%+ accuracy in chord placement and lyrics
-       2. IDENTITY RULE: If a YouTube URL is provided, identify that EXACT video from metadata using Google Search grounding
-       3. NO SUBSTITUTIONS: Never substitute with a popular version if it differs from the video provided
-       4. SPECIAL VERSIONS: For live versions, acoustic versions, or covers, transcribe THAT specific performance
-       5. CHORD VALIDATION: Double-check all chord positions align with lyrics/vocals
-       6. LYRICS ACCURACY: Ensure lyrics are transcribed correctly with proper capitalization and punctuation
-       7. FORMAT: Use standard ChordPro format with proper [CHORD] notation
+       1. CONFIDENCE REQUIREMENT: Only return transcriptions you are confident about. If uncertain, return {"error": "Unable to confidently identify or transcribe this song. Please try another song or provide a clearer source."}
+       2. ACCURACY FIRST: Maintain 95%+ accuracy in chord placement and lyrics. Better to decline than to guess.
+       3. IDENTITY RULE: If a YouTube URL is provided, search for and identify that EXACT video using Google Search grounding
+       4. NO SUBSTITUTIONS: Never substitute with a similar/popular version if it differs from the provided source
+       5. SPECIAL VERSIONS: For live versions, acoustic versions, or covers, transcribe THAT specific performance exactly
+       6. CHORD VALIDATION: Verify all chord positions align with lyrics/vocals. If you cannot verify, mark uncertain sections as [Unknown]
+       7. LYRICS ACCURACY: Transcribe lyrics exactly as performed, with proper capitalization and punctuation
+       8. FORMAT: Use standard ChordPro format with proper [CHORD] notation
+       9. UNKNOWN HANDLING: If any section is uncertain, mark it as [Unknown] rather than guessing
+       10. VERIFICATION: Cross-reference chords with known versions to ensure correctness before returning
        
-       Output format: Valid ChordPro JSON with high accuracy standards.`
-    : `Fast Mode: Extract chords from your internal knowledge. If a link is provided, infer the song title from the link text. Prioritize speed over exhaustive accuracy.`;
+       Output format: Valid ChordPro JSON with high accuracy standards OR error response if uncertain.`
+    : `Fast Mode: Extract chords from your most reliable internal knowledge only. Decline if unsure. If a link is provided, infer the song title from context. Only return results you are confident about. If uncertain, return an error instead of guessing.`;
 
   const prompt = isValidYoutubeUrl(trimmedInput)
     ? `YOUTUBE VIDEO TRANSCRIPTION TASK:
        URL: ${trimmedInput}
        
-       STEP 1: Search for this exact YouTube video using Google Search to get:
-       - Exact video title
-       - Artist name
-       - Video duration
-       - Whether it's original, live, acoustic, or cover version
+       REQUIRED VERIFICATION STEPS:
+       1. Search for this exact YouTube video to confirm:
+          - Exact video title (must match the video)
+          - Artist name
+          - Video duration
+          - Whether it's original, live, acoustic, or cover
+          - That it is actually a MUSIC/SONG video (not talking, podcast, etc.)
        
-       STEP 2: Transcribe the chords and lyrics for THIS SPECIFIC VIDEO with 90%+ accuracy:
-       - Extract each chord [C], [G], [Am], etc. in the correct position above the lyrics
-       - Include all verses, choruses, and sections
-       - Maintain the structure: Title, Artist, Key, ChordPro format
+       2. Only proceed if you can verify this is a legitimate song video
        
-       STEP 3: Return properly formatted ChordPro:
-       {title: "Exact Video Title", artist: "Artist Name", key: "Key (if known)", releaseDate: "Year if available", chordProContent: "full ChordPro content"}
+       3. Transcribe chords and lyrics ONLY FOR THIS SPECIFIC VIDEO:
+          - Extract each chord [C], [G], [Am], etc. in correct position
+          - Include all verses, choruses, bridges, and pre-choruses
+          - Preserve the exact performance (if live, transcribe live version)
        
-       CRITICAL: Match THIS video exactly, not a similar song by the same artist.`
+       4. VALIDATION: Before returning, verify:
+          - Chords sound correct when played mentally
+          - Lyrics match the video content
+          - Song structure is logical
+          - If ANY doubt exists, use [Unknown] for that chord/section
+       
+       RESPONSE OPTIONS:
+       A) If confident (95%+ sure): Return ChordPro JSON with accurate content
+       B) If less confident: Return {"error": "Unable to confidently transcribe this video. Try providing a more popular song or clearer source."}
+       C) If not a song: Return {"error": "This does not appear to be a music video."}
+       
+       Return JSON format: {title, artist, key, releaseDate, chordProContent}`
     : `SONG NAME TRANSCRIPTION TASK:
        Song Query: "${trimmedInput}"
        
-       Transcribe the most well-known version of this song with accurate chords and lyrics:
-       - Extract chords in proper [CHORD] notation
-       - Include verses, choruses, and sections
-       - Return ChordPro format with title, artist, key, and content
+       VERIFICATION STEPS:
+       1. Identify if this is a well-known, established song (not obscure)
+       2. Use your most reliable knowledge sources only
+       3. Transcribe the MOST WELL-KNOWN/ORIGINAL version ONLY
+       4. Transcribe with accuracy:
+          - Extract chords in proper [CHORD] notation
+          - Include verses, choruses, bridges, and pre-choruses
+          - Verify structure makes musical sense
+       
+       5. VALIDATION BEFORE RETURNING:
+          - Confirm chords progression sounds correct
+          - Verify lyrics are accurate to known versions
+          - If uncertain about any section, mark as [Unknown]
+       
+       RESPONSE OPTIONS:
+       A) If confident (95%+): Return ChordPro JSON
+       B) If less confident: Return {"error": "Not familiar enough with this song to provide accurate chords. Try a more well-known song."}
        
        Return JSON: {title, artist, key, releaseDate, chordProContent}`;
 
@@ -226,9 +254,14 @@ export const convertYoutubeToChordPro = async (input: string, useDeepSearch: boo
   await logSearch(trimmedInput, false);
   const parsed = extractJson(response.text || "{}");
   
+  // Check for error response from model
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
+  
   // Validate music content
   if (!parsed.chordProContent || parsed.chordProContent.trim() === '') {
-    throw new Error("This doesn't appear to be a music/song. Please provide a valid YouTube video of a song or a song name.");
+    throw new Error("Could not extract chords for this song. Try searching for a more popular song or a clearer YouTube video.");
   }
   
   if (parsed.title === "Unknown Song" && isValidYoutubeUrl(trimmedInput)) {
@@ -323,6 +356,70 @@ export const fetchFeedbacks = async (): Promise<Feedback[]> => {
     return data || [];
   } catch (err) {
     console.error("Feedback Fetch Failed:", err);
+    return [];
+  }
+};
+
+// Search cache by song title and artist (full-text search)
+export const searchCacheSongs = async (query: string, limit: number = 10): Promise<SongData[]> => {
+  if (!supabase) return [];
+  try {
+    const searchTerm = query.toLowerCase().trim();
+    if (!searchTerm) return [];
+
+    const { data, error } = await supabase
+      .from('song_cache')
+      .select('*')
+      .or(`title.ilike.%${searchTerm}%,artist.ilike.%${searchTerm}%`)
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+
+    return (data || []).map((d: any) => ({
+      title: d.title,
+      artist: d.artist,
+      releaseDate: d.release_date,
+      key: d.musical_key,
+      chordProContent: d.chord_pro_content,
+      sourceUrls: d.source_urls || [],
+      isCached: true
+    }));
+  } catch (err) {
+    console.error("Cache Search Failed:", err);
+    return [];
+  }
+};
+
+// Search YouTube for songs (using Gemini with Google Search)
+export const searchYoutubeSongs = async (query: string, limit: number = 8): Promise<YouTubeSearchResult[]> => {
+  try {
+    const ai = getAI();
+    
+    const searchPrompt = `Search YouTube for the song: "${query}"
+    
+    Return the top ${limit} results as a JSON array. For each result, include:
+    - id: YouTube video ID (extract from the URL)
+    - title: Video title
+    - artist: Artist name (extract if possible)
+    - duration: Duration if available
+    - url: Full YouTube URL
+    
+    Format: [{"id": "...", "title": "...", "artist": "...", "duration": "...", "url": "https://www.youtube.com/watch?v=..."}]`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: searchPrompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+      },
+    });
+
+    const parsed = extractJson(response.text || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error("YouTube Search Failed:", err);
     return [];
   }
 };

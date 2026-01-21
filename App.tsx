@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppStatus, SongData } from './types';
-import { convertYoutubeToChordPro, fetchRecentSongs } from './services/geminiService';
+import { AppStatus, SongData, SearchResults } from './types';
+import { convertYoutubeToChordPro, fetchRecentSongs, searchCacheSongs } from './services/geminiService';
 import ChordProViewer from './components/ChordProViewer';
 import FeedbackModal from './components/FeedbackModal';
 import RecentConversions from './components/RecentConversions';
 
-type ViewMode = 'HOME' | 'RESULT' | 'RECENT';
+type ViewMode = 'HOME' | 'RESULT' | 'RECENT' | 'SEARCH_RESULTS';
 
 const App: React.FC = () => {
   const [input, setInput] = useState('');
@@ -15,6 +15,9 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [recentSongs, setRecentSongs] = useState<SongData[]>([]);
   const [useDeepSearch, setUseDeepSearch] = useState(true);
+  const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // Feedback States
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
@@ -71,6 +74,10 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSearchInput = (val: string) => {
+    setInput(val);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -91,6 +98,10 @@ const App: React.FC = () => {
     setResult(null);
     setError(null);
     setInput('');
+    setSearchResults(null);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
     const url = new URL(window.location.href);
     url.searchParams.delete('q');
     window.history.pushState({}, '', url.toString());
@@ -176,7 +187,7 @@ const App: React.FC = () => {
                 <input 
                   type="text" 
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => handleSearchInput(e.target.value)}
                   placeholder="Paste URL or Song Title..."
                   className="bg-transparent border-none outline-none flex-grow text-white placeholder-slate-500 py-3 text-base md:text-lg w-full"
                   disabled={status === AppStatus.LOADING}
@@ -292,6 +303,56 @@ const App: React.FC = () => {
                 <p className="text-slate-500 text-sm leading-relaxed">Results are cached to global library, saving API tokens and providing instant access for the community.</p>
               </div>
             </section>
+          </div>
+        )}
+
+        {viewMode === 'SEARCH_RESULTS' && searchResults && (
+          <div className="animate-in fade-in duration-500 space-y-6">
+            <button 
+              onClick={() => setSearchResults(null)}
+              className="mb-4 text-slate-500 hover:text-white flex items-center gap-2 text-xs font-bold uppercase tracking-wider transition-colors px-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              Back to Search
+            </button>
+
+            {/* Cache Results */}
+            {searchResults.cacheResults.length > 0 && (
+              <section>
+                <h3 className="text-lg md:text-xl font-bold text-white mb-4 flex items-center gap-2 px-2">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                  From Your Library
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {searchResults.cacheResults.map((song, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setResult(song);
+                        setViewMode('RESULT');
+                        setStatus(AppStatus.SUCCESS);
+                        setSearchResults(null);
+                      }}
+                      className="text-left p-4 bg-slate-900/50 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:bg-slate-900/80 transition-all group"
+                    >
+                      <p className="font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-2">{song.title}</p>
+                      <p className="text-slate-400 text-sm mb-2">{song.artist}</p>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/></svg>
+                        From Cache
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {!isSearching && searchResults.cacheResults.length === 0 && (
+              <div className="text-center py-8 text-slate-400">
+                <p className="text-sm">No songs found in library for "{searchResults.query}"</p>
+                <p className="text-xs mt-2 text-slate-500">Try pasting a YouTube URL or searching for a different song.</p>
+              </div>
+            )}
           </div>
         )}
 
